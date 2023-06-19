@@ -12,6 +12,7 @@
 class SatHelper {
 private:
   int nextIntId = 1;
+  std::vector<std::string> model;
   std::unordered_map<std::string, int> varIntMap;
   std::unordered_map<int, std::string> intVarMap;
   std::vector<std::vector<int>> clauses;
@@ -66,7 +67,7 @@ private:
     return res;
   }
 
-  std::string formulaToStr() {
+  std::string formulaToStr() const {
     std::string res = "p cnf " + std::to_string(nextIntId - 1) + " " +
                       std::to_string((int)clauses.size()) + "\n";
     std::for_each(clauses.begin(), clauses.end(), [&res](const auto &clause) {
@@ -82,6 +83,9 @@ public:
    * int (dimacs doesn't use names)
    */
   void declareVar(const std::string &name) {
+    if (varIntMap.contains(name)) {
+      return;
+    }
     this->varIntMap[name] = this->nextIntId;
     this->intVarMap[this->nextIntId] = name;
     this->nextIntId += 1;
@@ -92,25 +96,38 @@ public:
   void addClause(const std::vector<std::string> &clause) {
     this->clauses.push_back(literalsToIntStr(clause));
   }
+    void addExactlyOne(const std::vector<std::string> &clause) {
+        std::ranges::for_each(
+                clause.begin(), clause.end(), [this, &clause](const auto &lit) {
+                    std::vector<std::string> cur_clause = {lit};
+                    std::ranges::for_each(clause.begin(), clause.end(),
+                                          [&lit, &cur_clause](const auto &other_lit) {
+                                              if (other_lit == lit)
+                                                  return;
+                                              cur_clause.push_back(getNegated(other_lit));
+                                          });
+                    this->addClause(cur_clause);
+                });
+    }
   /*
    * add a clause with at-most-one constraint
    */
   void addAtMostOne(const std::vector<std::string> &clause) {
-    std::for_each(clause.begin(), clause.end(),
-                  [idx = 0, &clause, this](const auto &lit) mutable {
-                    for (int j = idx; j < clause.size(); ++j) {
-                      std::vector<std::string> tmp = {getNegated(lit),
-                                                      getNegated(clause[j])};
-                      this->addClause(tmp);
-                    }
-                    ++idx;
-                  });
+    for (int i = 0; i < clause.size(); ++i) {
+      for (int j = i + 1; j < clause.size(); ++j) {
+        std::vector<std::string> tmp = {getNegated(clause[i]),
+                                        getNegated(clause[j])};
+        this->addClause(tmp);
+      }
+    }
   }
-  void printFormula() { std::cout << formulaToStr() << std::endl; }
-  bool solveSat() {
+
+  void printFormula() const { std::cout << formulaToStr() << std::endl; }
+
+  bool solveSat(const bool quiet = true) {
     const std::string formula = formulaToStr();
-    std::ofstream fout(FORMULA_FNAME);
-    fout << formula << std::endl;
+    std::ofstream ofstream(FORMULA_FNAME);
+    ofstream << formula << std::endl;
     FILE *fp = popen(("glucose -model " + FORMULA_FNAME).c_str(), "r");
     std::ostringstream out;
     while (!feof(fp) && !ferror(fp)) {
@@ -126,15 +143,17 @@ public:
       if (line == "s SATISFIABLE") {
         getline(stream, line);
         std::string var;
-        std::vector<std::string> actual_vars;
         std::istringstream var_line(line.substr(2));
         while (getline(var_line, var, ' ')) {
           int varCode = atoi(var.c_str());
-          actual_vars.push_back(intToVar(varCode));
-        };
+          this->model.push_back(intToVar(varCode));
+        }
+        if (quiet) {
+          return true;
+        }
         std::cout << "SATISFIABLE WITH VARS ";
-        for (int i = 0; i < actual_vars.size(); ++i) {
-          std::cout << actual_vars[i] << " ";
+        for (const auto &actual_var : model) {
+          std::cout << actual_var << " ";
         }
         return true;
       }
@@ -144,10 +163,14 @@ public:
     }
     return false;
   }
+
+  std::vector<std::string> get_model() const { return this->model; }
+
   void reset() {
     this->nextIntId = 1;
     this->clauses = {};
     this->intVarMap = {};
     this->varIntMap = {};
+    this->model = {};
   }
 };
